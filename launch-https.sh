@@ -35,7 +35,6 @@ export PORT="${PORT:-8443}"
 export SSL_ENABLED="${SSL_ENABLED:-true}"
 export SSL_KEY="${SSL_KEY:-${SSL_KEYFILE:-key.pem}}"
 export SSL_CERT="${SSL_CERT:-${SSL_CERTFILE:-cert.pem}}"
-TAILSCALE_SERVE="${TAILSCALE_SERVE:-false}"
 
 # Parse command line flags
 while [[ $# -gt 0 ]]; do
@@ -59,14 +58,6 @@ while [[ $# -gt 0 ]]; do
             export SSL_ENABLED="false"
             shift
             ;;
-        --tailscale-serve)
-            export SSL_ENABLED="false"
-            if [ "${HOST}" = "0.0.0.0" ]; then
-                export HOST="127.0.0.1"
-            fi
-            TAILSCALE_SERVE="true"
-            shift
-            ;;
         --host)
             export HOST="$2"
             shift 2
@@ -88,22 +79,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-# Configure Tailscale Serve if requested
-if [ "$TAILSCALE_SERVE" = "true" ]; then
-    if command -v tailscale >/dev/null 2>&1; then
-        echo "=========================================="
-        echo "Configuring Tailscale Serve -> http://127.0.0.1:${PORT}"
-        echo "=========================================="
-        tailscale serve --bg "http://127.0.0.1:${PORT}" || sudo tailscale serve --bg "http://127.0.0.1:${PORT}"
-        tailscale serve status || true
-        echo ""
-    else
-        echo "⚠️  WARNING: 'tailscale' CLI not found in PATH."
-        echo "   Run 'sudo tailscale serve --bg http://127.0.0.1:${PORT}' on the host."
-        echo ""
-    fi
-fi
 
 # Check if certificates exist when SSL is enabled
 if [ "$SSL_ENABLED" = "true" ]; then
@@ -162,8 +137,8 @@ fi
 echo "=========================================="
 echo ""
 if [ "$SSL_ENABLED" = "true" ]; then
-    echo "ℹ️  Tip: To avoid browser security warnings, use Tailscale Serve"
-    echo "   (./scripts/setup-tailscale-https.sh) or mkcert (./scripts/setup-mkcert-https.sh)."
+    echo "ℹ️  Tip: To avoid browser security warnings on LAN, generate locally-trusted"
+    echo "   certificates with mkcert: ./scripts/setup-mkcert-https.sh"
     echo ""
 fi
 
