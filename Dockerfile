@@ -174,6 +174,7 @@ COPY audio.py .
 COPY tools.py .
 COPY prompts.py .
 COPY clients/ ./clients/
+COPY agents/ ./agents/
 COPY static/ ./static/
 COPY demo_files/ ./demo_files/
 COPY launch-https.sh .
@@ -181,7 +182,7 @@ COPY scripts/ ./scripts/
 RUN chmod +x launch-https.sh scripts/*.sh
 
 # Create required directories
-RUN mkdir -p audio_cache
+RUN mkdir -p audio_cache workspace
 
 # =============================================================================
 # Environment Configuration
@@ -191,7 +192,7 @@ RUN mkdir -p audio_cache
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 ENV HOST=0.0.0.0 \
-    PORT=8443 \
+    PORT=9443 \
     SSL_ENABLED=true \
     SSL_KEY=key.pem \
     SSL_CERT=cert.pem \
@@ -213,11 +214,14 @@ ENV HOST=0.0.0.0 \
     # Nemotron Configuration (expects external llama-server)
     NEMOTRON_SERVER_URL=http://localhost:8005/v1/chat/completions \
     NEMOTRON_MODEL=nemotron-3-nano \
+    # Hermes Agent Configuration (optional background agent)
+    HERMES_URL=http://127.0.0.1:8642 \
+    HERMES_MODEL=hermes-agent \
     # HuggingFace cache
     HF_HOME=/root/.cache/huggingface
 
 # Expose HTTPS port
-EXPOSE 8443
+EXPOSE 9443
 
 # Health check (works for both HTTPS and plain HTTP when SSL_ENABLED=false)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

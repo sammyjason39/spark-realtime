@@ -61,10 +61,28 @@ class TTSConfig:
 class ServerConfig:
     """HTTP / HTTPS server bind and TLS configuration."""
     host: str = os.getenv("HOST", "0.0.0.0")
-    port: int = int(os.getenv("PORT", "8443"))
+    port: int = int(os.getenv("PORT", "9443"))
     ssl_enabled: bool = os.getenv("SSL_ENABLED", "true").lower() == "true"
     ssl_keyfile: str = os.getenv("SSL_KEY", os.getenv("SSL_KEYFILE", "key.pem"))
     ssl_certfile: str = os.getenv("SSL_CERT", os.getenv("SSL_CERTFILE", "cert.pem"))
+
+
+@dataclass
+class HermesConfig:
+    """Hermes Agent (Nous Research) background bridge configuration."""
+    enabled: bool = os.getenv(
+        "HERMES_ENABLED",
+        "true" if (os.getenv("HERMES_URL") or os.getenv("HERMES_API_KEY") or os.getenv("HERMES_CLI_PATH")) else "false"
+    ).lower() in ("true", "1", "yes", "on")
+    url: str = os.getenv("HERMES_URL", "http://127.0.0.1:8642")
+    api_key: str = os.getenv("HERMES_API_KEY", os.getenv("API_SERVER_KEY", ""))
+    model: str = os.getenv("HERMES_MODEL", "hermes-agent")
+    provider: str = os.getenv("HERMES_PROVIDER", "")
+    upstream_url: str = os.getenv("HERMES_UPSTREAM_URL", os.getenv("LLM_SERVER_URL", "http://localhost:8080/v1/chat/completions"))
+    timeout: int = int(os.getenv("HERMES_TIMEOUT", "600"))
+    max_concurrent: int = int(os.getenv("HERMES_MAX_CONCURRENT", "4"))
+    cli_path: str = os.getenv("HERMES_CLI_PATH", "hermes")
+    workspace_dir: str = os.getenv("HERMES_WORKSPACE", str(Path(os.getenv("WORKSPACE_ROOT", Path.cwd())).resolve() / "workspace"))
 
 
 # Directory paths
@@ -79,6 +97,10 @@ SAMPLE_RATE = 16000
 
 # Workspace root for file operations
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", Path.cwd())).resolve()
+
+# Shared agent workspace directory for generated artifacts
+AGENT_WORKSPACE_DIR = Path(os.getenv("HERMES_WORKSPACE", WORKSPACE_ROOT / "workspace")).resolve()
+AGENT_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 # FFmpeg path
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
