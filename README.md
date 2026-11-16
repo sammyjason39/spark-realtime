@@ -146,12 +146,114 @@ Open **https://localhost:8443** in your browser.
 
 ---
 
+## HTTPS Setup
+
+Browsers require a secure context (`https://` or `localhost`) to grant microphone and camera permissions (`navigator.mediaDevices.getUserMedia`). When accessing the DGX Spark from a Mac, iPhone, or iPad over the network, an untrusted certificate causes browser security warnings and can block WebSocket (`wss://`) or media access.
+
+Three HTTPS modes are supported:
+
+### Option 1: Tailscale Serve (Recommended — Zero Warnings on Mac & Phone)
+
+[Tailscale](https://tailscale.com/) provisions a real, publicly-trusted Let's Encrypt TLS certificate for your Spark's `https://<spark>.<tailnet>.ts.net` domain and proxies traffic to the local server. Every device on your tailnet (macOS, iOS, Android, etc.) trusts it automatically with **no root CA installation and no browser warnings**.
+
+1. **Prerequisites** (in the [Tailscale Admin Console](https://login.tailscale.com/admin/dns)):
+   - Enable **MagicDNS**
+   - Enable **HTTPS Certificates**
+
+2. **Configure `tailscale serve` and launch the app** on the DGX Spark:
+   ```bash
+   # Option A: One-step helper script + plain HTTP backend on 127.0.0.1
+   ./scripts/setup-tailscale-https.sh
+   HOST=127.0.0.1 PORT=8443 SSL_ENABLED=false ./launch-https.sh --local-asr --tts-overlap
+
+   # Option B: Single flag (runs tailscale serve and binds HTTP on 127.0.0.1:8443)
+   ./launch-https.sh --tailscale-serve --local-asr --tts-overlap
+   ```
+
+   If running via **Docker** (`--net host`):
+   ```bash
+   sudo tailscale serve --bg http://127.0.0.1:8443
+   docker run --gpus all --net host -it --init \
+       -v ~/.cache/huggingface:/root/.cache/huggingface \
+       -e HOST=127.0.0.1 -e PORT=8443 -e SSL_ENABLED=false \
+       spark-realtime-chatbot
+   ```
+
+3. **Open the app** from your Mac or phone:
+   ```
+   https://<spark>.<tailnet>.ts.net
+   ```
+
+*(Alternative: Direct Uvicorn TLS with `tailscale cert`)*
+If you prefer Uvicorn to terminate TLS directly on port `8443` instead of using `tailscale serve`:
+```bash
+./scripts/setup-tailscale-https.sh --cert
+SSL_CERT=cert.pem SSL_KEY=key.pem ./launch-https.sh --local-asr --tts-overlap
+# Open https://<spark>.<tailnet>.ts.net:8443
+```
+
+---
+
+### Option 2: `mkcert` (Trusted LAN Access Without Tailscale)
+
+If you want to connect directly over your local network (`https://<spark-hostname>.local:8443` or `https://<spark-lan-ip>:8443`) without Tailscale, use [`mkcert`](https://github.com/FiloSottile/mkcert) to create a local Certificate Authority (CA) and sign a certificate for the Spark's hostname and LAN IP.
+
+1. **Install `mkcert` on the DGX Spark (ARM64)**:
+   ```bash
+   sudo apt update && sudo apt install -y libnss3-tools
+   curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/arm64"
+   chmod +x mkcert-v*-linux-arm64
+   sudo mv mkcert-v*-linux-arm64 /usr/local/bin/mkcert
+   ```
+
+2. **Generate the certificate** (covers `localhost`, `<hostname>`, `<hostname>.local`, and the Spark's LAN IP):
+   ```bash
+   ./scripts/setup-mkcert-https.sh
+   ```
+   This writes `cert.pem` and `key.pem` in the project root (or to `$SSL_CERT` / `$SSL_KEY`).
+
+3. **Install the Root CA on your client devices**:
+   Locate the root CA file on the Spark with `mkcert -CAROOT` (usually `~/.local/share/mkcert/rootCA.pem`) and copy `rootCA.pem` to your devices (never share `rootCA-key.pem`).
+
+   - **macOS**:
+     ```bash
+     # From your Mac, copy rootCA.pem from the Spark and trust it in the System Keychain:
+     scp <user>@<spark-ip>:~/.local/share/mkcert/rootCA.pem ~/Downloads/spark-rootCA.pem
+     sudo security add-trusted-cert -d -r trustRoot \
+         -k /Library/Keychains/System.keychain ~/Downloads/spark-rootCA.pem
+     ```
+     *(Or double-click `spark-rootCA.pem` to open **Keychain Access**, add it to the **System** keychain, open the certificate info, expand **Trust**, and set **When using this certificate** to **Always Trust**.)*
+
+   - **iOS / iPadOS**:
+     1. AirDrop (or email/iCloud Drive) `spark-rootCA.pem` to your iPhone or iPad and tap to download the profile.
+     2. Open **Settings → General → VPN & Device Management**, tap the downloaded **mkcert** profile, and tap **Install**.
+     3. Open **Settings → General → About → Certificate Trust Settings** (at the very bottom) and toggle **ON** full trust for the `mkcert` root certificate.
+
+4. **Launch the server**:
+   ```bash
+   ./launch-https.sh --local-asr --tts-overlap
+   ```
+   *(In Docker, mount the generated certs with `-v $(pwd)/cert.pem:/app/cert.pem:ro -v $(pwd)/key.pem:/app/key.pem:ro`.)*
+
+---
+
+### Option 3: Self-Signed Certificate (Default Fallback)
+
+If neither Tailscale nor `mkcert` is configured and `cert.pem` / `key.pem` do not exist, `./launch-https.sh` automatically generates a 365-day self-signed certificate via `openssl`. This works out of the box but requires clicking through the browser's certificate warning on first visit.
+
+---
+
 ## Configuration
 
 Key environment variables (pass to Docker with `-e` or set before launching):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `HOST` | `0.0.0.0` | Server bind address (`127.0.0.1` behind `tailscale serve`) |
+| `PORT` | `8443` | Server port |
+| `SSL_ENABLED` | `true` | Enable TLS in Uvicorn (`false` for plain HTTP behind a reverse proxy) |
+| `SSL_CERT` | `cert.pem` | Path to TLS certificate file (alias: `SSL_CERTFILE`) |
+| `SSL_KEY` | `key.pem` | Path to TLS private key file (alias: `SSL_KEYFILE`) |
 | `LLM_SERVER_URL` | `http://localhost:8080/v1/chat/completions` | LLM/VLM endpoint |
 | `NEMOTRON_SERVER_URL` | `http://localhost:8005/v1/chat/completions` | Reasoning model endpoint |
 | `ASR_MODEL` | `Systran/faster-distil-whisper-large-v3` | Whisper model for ASR |
