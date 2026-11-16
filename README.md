@@ -6,11 +6,12 @@ A real-time voice and vision AI assistant running locally on NVIDIA DGX Spark �
 
 **Highlights:**
 - **Ultra-low latency**: ~320ms voice calls, ~850ms video calls (end-to-end)
-- **Runs entirely on-device**: No cloud APIs required
+- **Runs entirely on-device**: No cloud APIs required; all frontend dependencies (`marked`, `onnxruntime-web`, `vad-web`, `Inter`, `JetBrains Mono`, and Lucide SVG icons) are vendored locally in `static/`
 - **Vision + Voice**: Video calls with real-time scene understanding (Qwen3-VL)
+- **Hermes Agent Integration**: Non-blocking background task delegation (`delegate_task`) to [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent) with live step/tool progress and shared workspace artifact previews
 - **Face Recognition**: Enroll and identify users on the fly (DeepFace)
 - **GB10-optimized**: ASR, LLM, TTS, and vision running locally on DGX Spark
-- **Trusted LAN HTTPS**: Built-in `mkcert` setup for warning-free mic/camera access from macOS and iOS devices on your LAN
+- **Trusted LAN HTTPS**: Built-in `mkcert` setup for warning-free mic/camera access from macOS and iOS devices on your LAN (served on port `9443`)
 
 **Performance on DGX Spark:**
 | Component | Latency | RTF |
@@ -83,17 +84,35 @@ nohup ~/llama.cpp/build/bin/llama-server \
 # Wait until llama-server reports healthy
 until curl -fsS http://localhost:8080/health >/dev/null 2>&1; do sleep 2; done
 
-# 8. Build and start the spark-realtime-chatbot Docker container
+# 8. (Optional) Install and start Hermes Agent Gateway on DGX Spark ARM64 (port 8642)
+if [ ! -d ~/hermes-agent ]; then
+    git clone https://github.com/NousResearch/hermes-agent.git ~/hermes-agent
+    python3 -m venv ~/hermes-agent/.venv
+    ~/hermes-agent/.venv/bin/pip install --upgrade pip
+    ~/hermes-agent/.venv/bin/pip install -e ~/hermes-agent
+fi
+nohup env \
+    OPENAI_BASE_URL="http://127.0.0.1:8080/v1" \
+    OPENAI_API_KEY="local-spark" \
+    HERMES_WORKSPACE="$(pwd)/workspace" \
+    ~/hermes-agent/.venv/bin/hermes gateway --host 127.0.0.1 --port 8642 \
+    > ~/hermes-gateway.log 2>&1 &
+
+# 9. Build and start the spark-realtime-chatbot Docker container (port 9443)
 cd ~/spark-realtime-chatbot
+mkdir -p workspace
 docker build -t spark-realtime-chatbot .
 docker run -d --name spark-chatbot --gpus all --net host --init \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
+    -v "$(pwd)/workspace:/app/workspace" \
     -v "$(pwd)/cert.pem:/app/cert.pem:ro" \
     -v "$(pwd)/key.pem:/app/key.pem:ro" \
+    -e HERMES_URL="http://127.0.0.1:8642" \
     spark-realtime-chatbot
 
-# 9. Verify the server is healthy (allow ~30-60s on first start for ASR/TTS warmup)
-until curl -k -fsS https://localhost:8443/health; do sleep 2; done
+# 10. Verify the server and Hermes bridge are healthy (allow ~30-60s on first start for ASR/TTS warmup)
+until curl -k -fsS https://localhost:9443/health; do sleep 2; done
+curl -k -fsS https://localhost:9443/api/agents/status
 ```
 
 ---
@@ -176,6 +195,54 @@ Start `llama-server` on the host in separate terminals (or via `tmux` / `nohup`)
     --host 0.0.0.0 --port 8005 \
     -ngl 99 -c 32768 --threads 8 --threads-http 8 -fa on --cache-reuse 256
 ```
+
+---
+
+## Hermes Agent Setup on DGX Spark (ARM64)
+
+`spark-realtime` includes an asynchronous background bridge (`agents/hermes.py`) to [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent). When the `delegate_task` tool is enabled, Spark immediately acknowledges coding, app-building, or research requests over voice while Hermes executes in the background, streaming tool invocations, reasoning steps, and generated workspace artifacts to the right-side **Hermes Agent** panel.
+
+> **Graceful Degradation**: If `HERMES_URL` is not set and `hermes` is not installed on `PATH`, the server starts cleanly with `configured: false` and `transport: unconfigured`, disabling `delegate_task` automatically while keeping all voice, vision, and local assistant tools active.
+
+### 1. Install Hermes Agent on DGX Spark (`aarch64`)
+
+```bash
+git clone https://github.com/NousResearch/hermes-agent.git ~/hermes-agent
+cd ~/hermes-agent
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -e .
+```
+
+### 2. Run Hermes Alongside `spark-realtime`
+
+Point Hermes at your local `llama-server` (`http://127.0.0.1:8080/v1`) or an upstream OpenAI-compatible provider, sharing the `workspace/` directory with `spark-realtime`:
+
+```bash
+# Terminal 3 — Hermes Gateway API Server on port 8642
+source ~/hermes-agent/.venv/bin/activate
+export OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
+export OPENAI_API_KEY="local-spark"
+export HERMES_WORKSPACE="$HOME/spark-realtime-chatbot/workspace"
+
+hermes gateway --host 127.0.0.1 --port 8642
+```
+
+Then start `spark-realtime` with `HERMES_URL` configured:
+
+```bash
+export HERMES_URL="http://127.0.0.1:8642"
+./launch-https.sh --local-asr --tts-overlap
+```
+
+### 3. Supported Hermes Transport Modes
+
+`HermesAgentBridge` automatically probes and selects the fastest available transport:
+1. **`gateway_runs`**: Hermes Gateway `/v1/runs` + `/v1/runs/{id}/events` SSE stream + `/v1/runs/{id}/stop` cancellation.
+2. **`gateway_chat`**: Hermes Gateway `/v1/chat/completions` streaming SSE (supporting `hermes.tool.progress` events and reasoning deltas).
+3. **`cli`**: Subprocess fallback via `hermes chat -q ...` when the `hermes` CLI binary is on `PATH` (`HERMES_CLI_PATH`).
+4. **`local_openai`**: Built-in local agentic execution loop against `HERMES_UPSTREAM_URL` (defaults to `LLM_SERVER_URL` on port `8080`) when `HERMES_ENABLED=true` is set without a separate gateway daemon.
 
 ---
 
@@ -344,23 +411,24 @@ Once `llama-server` and `spark-realtime-chatbot` are running, run these checks o
 curl -fsS http://localhost:8080/health
 # Expected: {"status":"ok"}
 
-# 2. Verify the FastAPI HTTPS server is healthy
-curl -k -fsS https://localhost:8443/health
+# 2. Verify the FastAPI HTTPS server is healthy (default port 9443)
+curl -k -fsS https://localhost:9443/health
 # Expected: {"status":"ok"}
 
-# 3. Verify the API responds with the system prompt
-curl -k -fsS https://localhost:8443/api/default_prompt | head -c 120
+# 3. Verify the API responds with the system prompt and Hermes bridge status
+curl -k -fsS https://localhost:9443/api/default_prompt | head -c 120
+curl -k -fsS https://localhost:9443/api/agents/status
 
 # 4. If using mkcert, verify TLS passes WITHOUT -k against the local CA
-curl --cacert "$(mkcert -CAROOT)/rootCA.pem" -fsS https://localhost:8443/health
+curl --cacert "$(mkcert -CAROOT)/rootCA.pem" -fsS https://localhost:9443/health
 # Expected: {"status":"ok"}
 ```
 
 Then open the web UI in your browser:
-- **On the Spark**: `https://localhost:8443`
-- **From your Mac or iPhone on LAN**: `https://<spark-hostname>.local:8443` or `https://<spark-lan-ip>:8443`
+- **On the Spark**: `https://localhost:9443`
+- **From your Mac or iPhone on LAN**: `https://<spark-hostname>.local:9443` or `https://<spark-lan-ip>:9443`
 
-When the page loads, the status badge at the top will switch from **Connecting...** to **Connected**, and the assistant will speak a short greeting over the `/ws/voice` WebSocket (`wss://<host>:8443/ws/voice`).
+When the page loads, the status badge at the top will switch from **Connecting...** to **Connected**, and the assistant will speak a short greeting over the `/ws/voice` WebSocket (`wss://<host>:9443/ws/voice`).
 
 ---
 
@@ -372,10 +440,21 @@ All configuration options live in `config.py` and `launch-https.sh`. Override th
 |----------|-------------------------------------------|-------------|
 | **Server & TLS** | | |
 | `HOST` | `0.0.0.0` | Server bind address |
-| `PORT` | `8443` | Server port |
+| `PORT` | `9443` | Server port |
 | `SSL_ENABLED` | `true` | Enable HTTPS in Uvicorn (`false` for plain HTTP with `--http` / `--no-ssl`) |
 | `SSL_CERT` | `cert.pem` | Path to TLS certificate file (alias: `SSL_CERTFILE`) |
 | `SSL_KEY` | `key.pem` | Path to TLS private key file (alias: `SSL_KEYFILE`) |
+| **Hermes Agent Bridge** | | |
+| `HERMES_URL` | `""` (unset; probes `http://127.0.0.1:8642` when enabled) | Hermes Gateway URL (`http://127.0.0.1:8642`). Unset degrades gracefully to `unconfigured` |
+| `HERMES_ENABLED` | `auto` (`true` if `HERMES_URL`, `HERMES_API_KEY`, or `hermes` CLI is present; `false` otherwise) | Explicitly enable (`true`) or disable (`false`) the Hermes bridge |
+| `HERMES_API_KEY` | `""` (fallback: `API_SERVER_KEY`) | Bearer token for Hermes Gateway authentication |
+| `HERMES_MODEL` | `hermes-agent` | Model identifier sent to Hermes Gateway |
+| `HERMES_PROVIDER` | `""` | Optional upstream provider hint for Hermes |
+| `HERMES_UPSTREAM_URL` | `LLM_SERVER_URL` (`http://localhost:8080/v1/chat/completions`) | OpenAI-compatible fallback endpoint used in `local_openai` mode |
+| `HERMES_TIMEOUT` | `600` | Maximum execution timeout (seconds) per background task |
+| `HERMES_MAX_CONCURRENT` | `4` | Maximum concurrent background Hermes tasks |
+| `HERMES_CLI_PATH` | `hermes` | Path or binary name for the local Hermes CLI fallback |
+| `HERMES_WORKSPACE` | `./workspace` | Shared workspace directory for generated code and artifacts |
 | **ASR (Faster-Whisper)** | | |
 | `ASR_MODE` | `api` (`local` in Docker / `--local-asr`) | `local` for in-process `faster-whisper`, `api` for external server |
 | `ASR_MODEL` | `Systran/faster-distil-whisper-large-v3` (Docker) / `Systran/faster-whisper-small.en` (`launch-https.sh`) | Whisper model ID on HuggingFace |
@@ -433,13 +512,17 @@ All configuration options live in `config.py` and `launch-https.sh`. Override th
 
 ---
 
-## Usage
+## Web Console UI & Usage
 
-1. **Connect**: The app auto-connects over `wss://` on page load.
-2. **Choose Mode**: Click **+ New** to start a **Voice Call** or **Video Call**, or type/push-to-talk in the main chat view.
-3. **Voice Input**: Hands-free with Silero VAD auto voice detection, or switch to **PTT (Space)** for push-to-talk.
-4. **Enable Agents**: Open **Configuration** to enable specialized agents (**Reasoning Assistant (Nemotron)**, **Markdown Assistant**, **HTML Assistant**).
-5. **Face Recognition**: In **Video Call** mode, say *"Remember my face as [your name]"* to enroll your face in `face_db.json`.
+The web interface in `static/` is a three-pane console with zero external CDN dependencies:
+- **Left Sessions Sidebar**: Session history persisted in `localStorage`, quick session switcher, and diagnostic log toggle.
+- **Center Conversation Timeline & Stage**:
+  - Top status header displaying live state (**Idle**, **Listening**, **Thinking**, **Speaking**, **Agent Working**, **Error**), WebSocket connection status, RTT latency (`ms`), and Dark/Light theme toggle.
+  - Voice Call and Video Call stage docks with live waveform bars, camera preview, and VAD/PTT turn detection controls.
+  - Bottom control bar with push-to-talk (`Space` key or mic button), live 12-bar audio level + RMS energy gate meter, mode switcher (**Chat**, **Voice Call**, **Video Call**), Kokoro voice selector, and **Settings** modal.
+- **Right Hermes Agent & Workspace Panel**:
+  - **Activity Tab**: Direct task delegation bar, live Hermes task cards showing status (`queued`, `running`, `completed`, `failed`), tool call steps, streaming output/reasoning, and task cancellation.
+  - **Artifacts Tab**: Real-time index of files generated in `workspace/` with one-click source inspection and live rendered Markdown or sandboxed HTML preview.
 
 ---
 
@@ -470,21 +553,24 @@ All configuration options live in `config.py` and `launch-https.sh`. Override th
 ## Architecture
 
 ```
-Browser (HTTPS / WSS) ──► FastAPI Server (server.py) ──► llama.cpp (Qwen3-VL :8080, Nemotron :8005)
-                              │
-                              ├── ASR (faster-whisper, local or :8000)
-                              ├── TTS (Kokoro 24kHz PCM streaming)
-                              └── Face Recognition (DeepFace / Facenet512)
+Browser (HTTPS / WSS :9443) ──► FastAPI Server (server.py) ──► llama.cpp (Qwen3-VL :8080, Nemotron :8005)
+                                   │
+                                   ├── Hermes Agent Bridge (agents/hermes.py ──► Hermes Gateway :8642 / CLI / OpenAI)
+                                   ├── Shared Workspace API (/api/workspace/* & ./workspace)
+                                   ├── ASR (faster-whisper, local or :8000)
+                                   ├── TTS (Kokoro 24kHz PCM streaming)
+                                   └── Face Recognition (DeepFace / Facenet512)
 ```
 
 Key files:
-- `server.py` — FastAPI backend and `/ws/voice` WebSocket session handler
-- `config.py` — Dataclasses for `ASRConfig`, `LLMConfig`, `VLMConfig`, `NemotronConfig`, `TTSConfig`, and `ServerConfig`
+- `server.py` — FastAPI backend, `/ws/voice` WebSocket session handler, `/api/agents/*`, and `/api/workspace/*` endpoints
+- `agents/base.py` & `agents/hermes.py` — Abstract `AgentBridge` interface and `HermesAgentBridge` implementation
+- `config.py` — Dataclasses for `ASRConfig`, `LLMConfig`, `VLMConfig`, `NemotronConfig`, `TTSConfig`, `ServerConfig`, and `HermesConfig`
 - `launch-https.sh` — Startup script with configurable host/port/TLS and self-signed certificate fallback
 - `scripts/setup-mkcert-https.sh` — Generates locally-trusted `mkcert` certificates for `localhost`, `<hostname>`, `<hostname>.local`, and LAN IPs
-- `clients/` — ASR, LLM, TTS, VLM, and DeepFace recognition clients
-- `static/` — Frontend single-page web application (HTML/JS/CSS)
-- `tools.py` — Agent tool definitions (`markdown_assistant`, `html_assistant`, `reasoning_assistant`)
+- `clients/` — Shared `HTTPSessionManager` plus ASR, LLM, TTS, VLM, and DeepFace recognition clients
+- `static/` — Modular frontend (`static/css/{tokens,layout,components,panels}.css`, `static/js/{icons,state,audio-video,hermes-panel,websocket,app}.js`, `static/vendor/`, `static/fonts/`)
+- `tools.py` — Agent tool definitions (`delegate_task`, `markdown_assistant`, `html_assistant`, `reasoning_assistant`)
 - `prompts.py` — System prompts for voice, video, and agent modes
 
 ---
