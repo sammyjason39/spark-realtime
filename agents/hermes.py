@@ -310,11 +310,11 @@ class HermesAgentBridge(AgentBridge):
     async def _emit(
         self,
         on_event: Optional[EventCallback],
-        task: AgentTask,
+        agent_task: AgentTask,
         event_type: str,
         **data: Any,
     ) -> None:
-        event = AgentEvent(task_id=task.task_id, event_type=event_type, data=data)
+        event = AgentEvent(task_id=agent_task.task_id, event_type=event_type, data=data)
         if on_event:
             try:
                 await on_event(event)
