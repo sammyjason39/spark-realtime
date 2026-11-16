@@ -84,18 +84,25 @@ class HermesAgentBridge(AgentBridge):
 
     def is_configured(self) -> bool:
         """Check whether Hermes is enabled or reachable via env/config/CLI."""
-        if os.getenv("HERMES_ENABLED", "").lower() in ("false", "0", "no", "off"):
+        raw_enabled = os.getenv("HERMES_ENABLED", "").strip().lower()
+        if raw_enabled in ("false", "0", "no", "off"):
             return False
-        if self.cfg.enabled:
+        if raw_enabled in ("true", "1", "yes", "on"):
             return True
-        if os.getenv("HERMES_URL") or os.getenv("HERMES_API_KEY"):
+        if os.getenv("HERMES_URL", "").strip() or os.getenv("HERMES_API_KEY", "").strip():
             return True
-        if shutil.which(self.cfg.cli_path):
+        if self.cfg.url or self.cfg.api_key:
+            return True
+        cli = os.getenv("HERMES_CLI_PATH", self.cfg.cli_path).strip() or "hermes"
+        if shutil.which(cli):
+            return True
+        if self._transport_mode not in ("unconfigured", ""):
             return True
         return False
 
     def _base_url(self) -> str:
-        url = (self.cfg.url or "http://127.0.0.1:8642").rstrip("/")
+        raw = os.getenv("HERMES_URL", "").strip() or self.cfg.url or "http://127.0.0.1:8642"
+        url = raw.rstrip("/")
         if url.endswith("/v1/chat/completions"):
             url = url[: -len("/v1/chat/completions")]
         elif url.endswith("/v1"):
@@ -161,6 +168,7 @@ class HermesAgentBridge(AgentBridge):
             pass
 
         # 2. Check /health or /v1/models on HERMES_URL
+        has_explicit_url = bool(os.getenv("HERMES_URL", "").strip() or self.cfg.url)
         try:
             async with session.get(
                 f"{base}/health",
@@ -172,19 +180,33 @@ class HermesAgentBridge(AgentBridge):
                     if isinstance(data, dict) and data.get("platform") == "hermes-agent":
                         self._transport_mode = "gateway_chat"
                         return
-                    if isinstance(data, dict) and data.get("status") == "ok" and os.getenv("HERMES_URL"):
+                    if isinstance(data, dict) and data.get("status") == "ok" and has_explicit_url:
                         self._transport_mode = "gateway_chat"
                         return
         except Exception:
             pass
 
+        if has_explicit_url:
+            try:
+                async with session.get(
+                    f"{base}/v1/models",
+                    headers=self._headers(),
+                    timeout=aiohttp.ClientTimeout(total=2.0, connect=1.0),
+                ) as resp:
+                    if resp.status == 200:
+                        self._transport_mode = "gateway_chat"
+                        return
+            except Exception:
+                pass
+
         # 3. Check if `hermes` CLI binary is installed
-        if shutil.which(self.cfg.cli_path):
+        cli = os.getenv("HERMES_CLI_PATH", self.cfg.cli_path).strip() or "hermes"
+        if shutil.which(cli):
             self._transport_mode = "cli"
             return
 
         # 4. If HERMES_ENABLED=true or HERMES_URL is explicitly configured, allow local OpenAI-compatible agent loop
-        if self.cfg.enabled:
+        if os.getenv("HERMES_ENABLED", "").strip().lower() in ("true", "1", "yes", "on") or has_explicit_url:
             self._transport_mode = "local_openai"
             return
 
@@ -452,8 +474,8 @@ class HermesAgentBridge(AgentBridge):
             return
 
         # Local OpenAI-compatible endpoint (e.g., llama-server on :8080) or configured HERMES_URL
-        target_url = self.cfg.upstream_url
-        if os.getenv("HERMES_URL"):
+        target_url = os.getenv("HERMES_UPSTREAM_URL") or self.cfg.upstream_url
+        if (os.getenv("HERMES_URL") or self.cfg.url) and self._transport_mode != "local_openai":
             base = self._base_url()
             target_url = f"{base}/v1/chat/completions"
 

@@ -214,8 +214,8 @@ ENV HOST=0.0.0.0 \
     # Nemotron Configuration (expects external llama-server)
     NEMOTRON_SERVER_URL=http://localhost:8005/v1/chat/completions \
     NEMOTRON_MODEL=nemotron-3-nano \
-    # Hermes Agent Configuration (optional background agent)
-    HERMES_URL=http://127.0.0.1:8642 \
+    # Hermes Agent Configuration (optional background agent; set HERMES_URL=http://127.0.0.1:8642 to enable)
+    HERMES_URL="" \
     HERMES_MODEL=hermes-agent \
     # HuggingFace cache
     HF_HOME=/root/.cache/huggingface

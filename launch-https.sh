@@ -36,8 +36,8 @@ export SSL_ENABLED="${SSL_ENABLED:-true}"
 export SSL_KEY="${SSL_KEY:-${SSL_KEYFILE:-key.pem}}"
 export SSL_CERT="${SSL_CERT:-${SSL_CERTFILE:-cert.pem}}"
 
-# Hermes Agent (Nous Research) configuration
-export HERMES_URL="${HERMES_URL:-http://127.0.0.1:8642}"
+# Hermes Agent (Nous Research) configuration (optional; degrades gracefully when unset)
+export HERMES_URL="${HERMES_URL:-}"
 export HERMES_MODEL="${HERMES_MODEL:-hermes-agent}"
 export HERMES_TIMEOUT="${HERMES_TIMEOUT:-600}"
 export HERMES_MAX_CONCURRENT="${HERMES_MAX_CONCURRENT:-4}"
