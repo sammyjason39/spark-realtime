@@ -1,11 +1,11 @@
 # =============================================================================
-# spark-realtime-chatbot Dockerfile for DGX Spark (CUDA 13.0 / GB10)
+# spark-realtime Dockerfile for DGX Spark (CUDA 13.0 / GB10)
 # =============================================================================
 # This Dockerfile builds CTranslate2 from source with CUDA support for the
 # GB10 architecture (sm_121) and installs all dependencies.
 #
-# Build: docker build -t spark-realtime-chatbot .
-# Run:   docker run --gpus all -p 8443:8443 spark-realtime-chatbot
+# Build: docker build -t spark-realtime .
+# Run:   docker run --gpus all -p 9443:9443 spark-realtime
 # =============================================================================
 
 FROM nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
@@ -198,6 +198,7 @@ ENV HOST=0.0.0.0 \
     SSL_CERT=cert.pem \
     # ASR Configuration (local mode for lower latency)
     ASR_MODE=local \
+    ASR_API_URL=http://localhost:9000/v1/audio/transcriptions \
     ASR_MODEL=Systran/faster-distil-whisper-large-v3 \
     ASR_DEVICE=cuda \
     ASR_COMPUTE_TYPE=float16 \

@@ -1,4 +1,4 @@
-"""Configuration dataclasses for spark-realtime-chatbot."""
+"""Configuration dataclasses for spark-realtime."""
 
 import os
 import shutil
@@ -10,7 +10,7 @@ from pathlib import Path
 class ASRConfig:
     """Automatic Speech Recognition configuration."""
     mode: str = os.getenv("ASR_MODE", "api")  # "api" for server, "local" for in-process
-    api_url: str = os.getenv("ASR_API_URL", "http://localhost:8000/v1/audio/transcriptions")
+    api_url: str = os.getenv("ASR_API_URL", "http://localhost:9000/v1/audio/transcriptions")
     api_key: str = os.getenv("ASR_API_KEY", "dummy-key")
     model: str = os.getenv("ASR_MODEL", "Systran/faster-whisper-small.en")
     # Local mode settings
